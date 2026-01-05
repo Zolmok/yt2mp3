@@ -1,0 +1,10 @@
+[package]
+name = "yt2mp3"
+version = "0.1.0"
+edition = "2021"
+description = "Download YouTube videos and extract audio as MP3"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.5.37", features = ["derive"] }
+regex = "1.11.1"
