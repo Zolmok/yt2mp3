@@ -1,7 +1,5 @@
 use clap::Parser;
 use regex::Regex;
-use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
@@ -10,8 +8,6 @@ static RE_NON_ALNUM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9]+").expect("valid regex"));
 static RE_MULTI_DASH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-+").expect("valid regex"));
-
-const OUTPUT_TEMPLATE: &str = "%(title)s.%(ext)s";
 
 /// Download a YouTube video and extract MP3.
 #[derive(Parser)]
@@ -45,19 +41,6 @@ fn sanitize_filename(title: &str) -> String {
     result
 }
 
-/// Move a file, falling back to copy+delete for cross-filesystem moves.
-fn move_file(from: &Path, to: &Path) -> Result<(), String> {
-    match fs::rename(from, to) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::CrossesDevices => {
-            fs::copy(from, to).map_err(|e| format!("Copy failed: {}", e))?;
-            fs::remove_file(from).map_err(|e| format!("Remove original failed: {}", e))?;
-            Ok(())
-        }
-        Err(e) => Err(format!("Rename failed: {}", e)),
-    }
-}
-
 /// Find a unique filename by appending a number suffix if needed.
 fn unique_path(base: &str, ext: &str) -> std::path::PathBuf {
     let candidate = format!("{}.{}", base, ext);
@@ -76,17 +59,7 @@ fn unique_path(base: &str, ext: &str) -> std::path::PathBuf {
 }
 
 fn download_and_extract_mp3(url: &str) -> Result<(), String> {
-    // Download with visible progress (stdout/stderr inherited)
-    let status = Command::new("yt-dlp")
-        .args(["-x", "--audio-format", "mp3", "-o", OUTPUT_TEMPLATE, url])
-        .status()
-        .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
-
-    if !status.success() {
-        return Err(format!("yt-dlp failed with status: {}", status));
-    }
-
-    // Query yt-dlp for the video title
+    // Get the video title first
     let output = Command::new("yt-dlp")
         .args(["--print", "%(title)s", "--no-download", url])
         .output()
@@ -97,21 +70,22 @@ fn download_and_extract_mp3(url: &str) -> Result<(), String> {
         return Err("yt-dlp produced no title".to_string());
     }
 
-    let downloaded_file = format!("{}.mp3", title);
-    let downloaded_path = Path::new(&downloaded_file);
-
-    if !downloaded_path.exists() {
-        return Err(format!("Downloaded file not found: {}", downloaded_file));
-    }
-
     let cleaned_name = sanitize_filename(&title);
-    let new_path = unique_path(&cleaned_name, "mp3");
+    let final_path = unique_path(&cleaned_name, "mp3");
+    let base = final_path.file_stem().unwrap().to_str().unwrap();
+    let output_template = format!("{}.%(ext)s", base);
 
-    if downloaded_path != new_path {
-        move_file(downloaded_path, &new_path)?;
+    // Download directly to the slugified filename
+    let status = Command::new("yt-dlp")
+        .args(["-x", "--audio-format", "mp3", "-o", &output_template, url])
+        .status()
+        .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+
+    if !status.success() {
+        return Err(format!("yt-dlp failed with status: {}", status));
     }
-    println!("Saved: {}", new_path.display());
 
+    println!("Saved: {}", final_path.display());
     Ok(())
 }
 
